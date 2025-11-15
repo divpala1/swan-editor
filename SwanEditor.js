@@ -50,7 +50,13 @@ export default class SwanEditor {
         this.selectedNodes = new Set();
         this.dragState = null;
         this.connectionState = null;
+
+        // Connection cache for O(1) lookups
+        this.connectionCache = new Map(); // nodeId -> {inputs: Set, outputs: Set}
         
+        // Dirty tracking for selective re-renders
+        this.dirtyNodes = new Set();
+
         // ID counters
         this.nodeIdCounter = 1;
         this.edgeIdCounter = 1;
@@ -218,9 +224,9 @@ export default class SwanEditor {
                 top: 0;
                 left: 0;
                 right: 0;
-                height: 30px;
+                // height: 30px;
                 cursor: move;
-                border-radius: 6px 6px 0 0;
+                // border-radius: 6px 6px 0 0;
             }
             
             .node-content {
@@ -360,6 +366,9 @@ export default class SwanEditor {
         // Store node
         this.nodes.set(id, node);
         
+        // Initialize cache
+        this.initNodeCache(id);
+
         // Render node
         this.renderNode(node);
         
@@ -474,6 +483,9 @@ export default class SwanEditor {
         // Remove from selection
         this.selectedNodes.delete(nodeId);
         
+        // Cleanup cache
+        this.cleanupNodeCache(nodeId);
+
         // Remove from map
         this.nodes.delete(nodeId);
         
@@ -518,14 +530,17 @@ export default class SwanEditor {
         
         // Store edge
         this.edges.set(id, edge);
-        
+
         // Render edge
         this.renderEdge(edge);
-        
+
         // Update port states
         this.updatePortStates();
         
-        // Call onConnect lifecycle for both nodes
+        // Update cache
+        this.updateCacheOnEdgeCreate(edge);
+        
+        // Call lifecycle hooks
         const sourceNode = this.nodes.get(sourceId);
         const targetNode = this.nodes.get(targetId);
         const sourceType = this.nodeTypes.get(sourceNode.type);
@@ -653,6 +668,9 @@ export default class SwanEditor {
         const edge = this.edges.get(edgeId);
         if (!edge) return;
         
+        // Update cache before deletion
+        this.updateCacheOnEdgeDelete(edge);
+        
         // Call onDisconnect lifecycle for both nodes
         const sourceNode = this.nodes.get(edge.source);
         const targetNode = this.nodes.get(edge.target);
@@ -708,29 +726,219 @@ export default class SwanEditor {
         * @param {Object} node - The node object to find connections for
         * @returns {Array} - Array of connected node objects
     */
-    getConnectedNodes(nodeId, nodeType = '') {
-        const inputNodes = new Set();
-        const outputNodes = new Set();
+    getConnectedNodes(nodeId, direction = '') {
+        const connectionData = this.getConnectionDataCached(nodeId);
+        
+        if (direction === 'input') {
+            return { inputs: connectionData.inputs, outputs: [] };
+        } else if (direction === 'output') {
+            return { inputs: [], outputs: connectionData.outputs };
+        }
+        
+        return {
+            inputs: connectionData.inputs,
+            outputs: connectionData.outputs
+        };
+    }
 
-        console.log('Getting connected nodes --- wfe()')
+    /**
+     * Clean up cache when node is deleted
+     * Call this in deleteNode() before this.nodes.delete(nodeId)
+     */
+    cleanupNodeCache(nodeId) {
+        this.connectionCache.delete(nodeId);
+        this.dirtyNodes.delete(nodeId);
+    }
 
-        // Find all edges connected to the node
+    /**
+     * Validate and repair cache (call periodically or on load)
+     */
+    validateCache() {
+        let issues = 0;
+        
+        // Rebuild cache from edges
+        const newCache = new Map();
+        
+        this.nodes.forEach((node, nodeId) => {
+            newCache.set(nodeId, {
+                inputs: new Set(),
+                outputs: new Set()
+            });
+        });
+        
         this.edges.forEach(edge => {
-            if ((nodeType === '' || nodeType === 'output') && edge.source === nodeId) {
-                const targetNode = this.nodes.get(edge.target);
-                if (targetNode) {
-                    outputNodes.add(targetNode);
+            if (newCache.has(edge.source) && newCache.has(edge.target)) {
+                newCache.get(edge.source).outputs.add(edge.id);
+                newCache.get(edge.target).inputs.add(edge.id);
+            }
+        });
+        
+        // Compare with current cache
+        newCache.forEach((data, nodeId) => {
+            const current = this.connectionCache.get(nodeId);
+            if (!current || 
+                data.inputs.size !== current.inputs.size || 
+                data.outputs.size !== current.outputs.size) {
+                issues++;
+            }
+        });
+        
+        if (issues > 0) {
+            console.warn(`SwanEditor: Cache validation found ${issues} issues, rebuilding...`);
+            this.connectionCache = newCache;
+        }
+        
+    return issues;
+}
+
+
+    /**
+     * Initialize connection cache for a node
+     */
+    initNodeCache(nodeId) {
+        if (!this.connectionCache.has(nodeId)) {
+            this.connectionCache.set(nodeId, {
+                inputs: new Set(),   // Set of edge IDs
+                outputs: new Set()   // Set of edge IDs
+            });
+        }
+    }
+
+    /**
+     * Update connection cache when edge is created
+     * Call this in createEdge() after this.edges.set(id, edge)
+     */
+    updateCacheOnEdgeCreate(edge) {
+        // Initialize cache if needed
+        this.initNodeCache(edge.source);
+        this.initNodeCache(edge.target);
+        
+        // Update cache
+        this.connectionCache.get(edge.source).outputs.add(edge.id);
+        this.connectionCache.get(edge.target).inputs.add(edge.id);
+        
+        // Mark nodes as dirty for batch re-render
+        this.dirtyNodes.add(edge.source);
+        this.dirtyNodes.add(edge.target);
+        
+        // Schedule batch update
+        this.scheduleBatchUpdate();
+    }
+
+    /**
+     * Update connection cache when edge is deleted
+     * Call this in deleteEdge() before this.edges.delete(edgeId)
+     */
+    updateCacheOnEdgeDelete(edge) {
+        const sourceCache = this.connectionCache.get(edge.source);
+        const targetCache = this.connectionCache.get(edge.target);
+        
+        if (sourceCache) sourceCache.outputs.delete(edge.id);
+        if (targetCache) targetCache.inputs.delete(edge.id);
+        
+        // Mark nodes as dirty
+        this.dirtyNodes.add(edge.source);
+        this.dirtyNodes.add(edge.target);
+        
+        // Schedule batch update
+        this.scheduleBatchUpdate();
+    }
+
+    /**
+     * Batch update dirty nodes (debounced for performance)
+     */
+    scheduleBatchUpdate() {
+        if (this.batchUpdateTimer) {
+            clearTimeout(this.batchUpdateTimer);
+        }
+        
+        this.batchUpdateTimer = setTimeout(() => {
+            this.processDirtyNodes();
+        }, 16); // ~60fps
+    }
+
+    /**
+     * Process all dirty nodes in one batch
+     */
+    processDirtyNodes() {
+        if (this.dirtyNodes.size === 0) return;
+        
+        // Process all dirty nodes
+        this.dirtyNodes.forEach(nodeId => {
+            const node = this.nodes.get(nodeId);
+            if (node) {
+                // Update connection data
+                node._connectionData = this.getConnectionDataCached(nodeId);
+                
+                // Re-render only if node has connection-aware template
+                const nodeType = this.nodeTypes.get(node.type);
+                if (nodeType && nodeType.onConnectionChange) {
+                    nodeType.onConnectionChange(node, node._connectionData);
                 }
-            } else if ((nodeType === '' || nodeType === 'input') && edge.target === nodeId) {
+                
+                // Re-render node
+                const oldElement = node.element;
+                this.renderNode(node);
+                oldElement.remove();
+                
+                // Update edges
+                this.scheduleEdgeUpdate(nodeId);
+            }
+        });
+        
+        this.dirtyNodes.clear();
+        this.batchUpdateTimer = null;
+    }
+
+    /**
+     * Get connection data using cache (O(1) lookup)
+     */
+    getConnectionDataCached(nodeId) {
+        const cache = this.connectionCache.get(nodeId);
+        if (!cache) {
+            return { inputs: [], outputs: [], inputCount: 0, outputCount: 0 };
+        }
+        
+        const inputs = [];
+        const outputs = [];
+        
+        // Convert edge IDs to node data
+        cache.inputs.forEach(edgeId => {
+            const edge = this.edges.get(edgeId);
+            if (edge) {
                 const sourceNode = this.nodes.get(edge.source);
                 if (sourceNode) {
-                    inputNodes.add(sourceNode);
+                    inputs.push({
+                        id: sourceNode.id,
+                        type: sourceNode.type,
+                        data: sourceNode.data,
+                        edgeId: edge.id
+                    });
                 }
             }
         });
-
-        // Dict: input & output
-        return { inputs: Array.from(inputNodes), outputs: Array.from(outputNodes) };
+        
+        cache.outputs.forEach(edgeId => {
+            const edge = this.edges.get(edgeId);
+            if (edge) {
+                const targetNode = this.nodes.get(edge.target);
+                if (targetNode) {
+                    outputs.push({
+                        id: targetNode.id,
+                        type: targetNode.type,
+                        data: targetNode.data,
+                        edgeId: edge.id
+                    });
+                }
+            }
+        });
+        
+        return {
+            inputs,
+            outputs,
+            inputCount: inputs.length,
+            outputCount: outputs.length
+        };
     }
 
     /**
@@ -1060,7 +1268,6 @@ export default class SwanEditor {
             e.preventDefault();
             this.deleteSelected();
         }
-        
         
         // Select all
         if (e.key === 'a' && (e.ctrlKey || e.metaKey)) {

@@ -308,8 +308,87 @@ editor.createEdge(aiNode, vizNode, {
     }
 });
 
+// ========================================
+// 5. Nodes with re-active connections data
+// ========================================
+export const inputNodeConfig = {
+    template: (node) => {
+        // Get connection data (this will be called on re-render)
+        const connectionData = node._connectionData || { inputs: [], outputs: [], inputCount: 0, outputCount: 0 };
+        
+        return `
+        <div class="node-handle"></div>
+        <div class="node-content group relative bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 hover:shadow-md transition-shadow">
+            <!-- Compact Node View -->
+            <div class="p-3">
+                <div class="flex items-center justify-between gap-2">
+                    <div class="flex items-center gap-2 min-w-0">
+                        <div class="flex-shrink-0 w-8 h-8 rounded bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center">
+                            <svg class="w-4 h-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                            </svg>
+                        </div>
+                        <div class="min-w-0 flex-1">
+                            <h3 class="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">Input</h3>
+                            <p class="text-xs text-gray-500 dark:text-gray-400 truncate">${
+                                node.data.inputType === 'text' ? 'Text' :
+                                node.data.inputType === 'file' ? 'File' :
+                                node.data.inputType === 'json' ? 'JSON' :
+                                node.data.inputType === 'number' ? 'Number' : 'Text'
+                            }</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <!-- Connection Badge -->
+                        ${connectionData.outputCount > 0 ? `
+                            <span class="px-2 py-1 text-xs font-medium bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 rounded-full">
+                                ${connectionData.outputCount} connected
+                            </span>
+                        ` : ''}
+                    </div>
+                </div>
+
+                <!-- Connected Nodes Display -->
+                ${connectionData.outputCount > 0 ? `
+                    <div class="mt-2 pt-2 border-t border-gray-200 dark:border-gray-700">
+                        <p class="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">Connected to:</p>
+                        <div class="space-y-1">
+                            ${connectionData.outputs.map(conn => `
+                                <div class="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
+                                    <svg class="w-3 h-3 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                                        <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                                    </svg>
+                                    <span class="truncate">${conn.data.variableName || conn.type} (${conn.type})</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                ` : ''}
+            </div>
+        </div>
+    `;
+    },
+    ports: ['output'],
+    style: {
+        minWidth: '180px'
+    },
+    onCreate: (node) => {
+        node.data = {
+            ...node.data,
+            variableName: node.data.variableName || '',
+            inputType: node.data.inputType || 'text',
+            label: node.data.label || '',
+            defaultValue: node.data.defaultValue || '',
+            required: node.data.required || false
+        };
+    },
+    onConnect: (source, target, edge) => {
+        console.log(`Input connected: ${source.id} -> ${target.id}`);
+    }
+};
+
 // ============================================
-// 5. WORKFLOW MANAGEMENT
+// 6. WORKFLOW MANAGEMENT
 // ============================================
 
 // Save workflow to JSON
@@ -354,7 +433,7 @@ function clearWorkflow() {
 }
 
 // ============================================
-// 6. ADVANCED INTERACTIONS
+// 7. ADVANCED INTERACTIONS
 // ============================================
 
 // Programmatic node selection
@@ -383,7 +462,7 @@ const connectedToAI = editor.getConnectedNodes(aiNode);
 console.log('Nodes connected to AI Processor:', connectedToAI);
 
 // ============================================
-// 7. CUSTOM EVENT HANDLING
+// 8. CUSTOM EVENT HANDLING
 // ============================================
 
 // Create a workflow executor
@@ -462,7 +541,7 @@ executor.execute().then(results => {
 });
 
 // ============================================
-// 8. TOOLBAR AND UI INTEGRATION
+// 9. TOOLBAR AND UI INTEGRATION
 // ============================================
 
 // Create a toolbar for the editor
@@ -514,7 +593,7 @@ function createToolbar() {
 createToolbar();
 
 // ============================================
-// 9. CLEANUP
+// 10. CLEANUP
 // ============================================
 
 // Properly destroy the editor when needed
