@@ -36,11 +36,14 @@ export default class SwanEditor {
             canvas: {                       // Canvas configuration
                 width: '100%',
                 height: '100vh',
-                background: '#f9fafb',
+                background: {
+                    light: '#f9fafb',
+                    dark: '#0f172a'
+                },
                 zoomable: false,
                 pannable: true
             },
-            callbacks: {},                  // Event callbacks
+            callbacks: {},
             ...options
         };
         
@@ -79,20 +82,26 @@ export default class SwanEditor {
      * Initialize the editor DOM and event listeners
      */
     init() {
-        // Add required styles if not already present
         this.injectStyles();
         
-        // Create canvas structure
+        // Create canvas structure with theme class
         this.container.innerHTML = `
-            <div class="workflow-container" style="width: ${this.options.canvas.width}; height: ${this.options.canvas.height};">
+            <div class="workflow-container ${this.options.theme === 'dark' ? 'dark' : ''}" 
+                style="width: ${this.options.canvas.width}; height: ${this.options.canvas.height};">
                 <div class="workflow-canvas" data-workflow-canvas>
                     <svg class="workflow-svg" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1;">
                         <defs>
-                            <marker id="wf-arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
-                                <polygon points="0 0, 10 3, 0 6" fill="${this.options.edgeStyle.color}" />
+                            <marker id="wf-arrowhead-light" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                                <polygon points="0 0, 10 3, 0 6" fill="#6b7280" />
                             </marker>
-                            <marker id="wf-arrowhead-selected" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                            <marker id="wf-arrowhead-dark" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                                <polygon points="0 0, 10 3, 0 6" fill="#94a3b8" />
+                            </marker>
+                            <marker id="wf-arrowhead-selected-light" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
                                 <polygon points="0 0, 10 3, 0 6" fill="#3b82f6" />
+                            </marker>
+                            <marker id="wf-arrowhead-selected-dark" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                                <polygon points="0 0, 10 3, 0 6" fill="#60a5fa" />
                             </marker>
                         </defs>
                     </svg>
@@ -103,10 +112,9 @@ export default class SwanEditor {
         this.canvas = this.container.querySelector('[data-workflow-canvas]');
         this.svg = this.container.querySelector('svg');
         
-        // Apply canvas background
-        this.canvas.style.background = this.options.canvas.background;
+        // Apply canvas background based on theme
+        this.updateCanvasBackground();
         
-        // Set up event listeners
         this.setupEventListeners();
     }
     
@@ -122,6 +130,7 @@ export default class SwanEditor {
             .workflow-container {
                 position: relative;
                 overflow: hidden;
+                transition: background-color 0.2s ease;
             }
             
             .workflow-canvas {
@@ -129,62 +138,101 @@ export default class SwanEditor {
                 width: 100%;
                 height: 100%;
                 overflow: auto;
+                background: #f9fafb;
+                transition: background-color 0.2s ease;
+            }
+            
+            .dark .workflow-canvas {
+                background: #0f172a;
             }
             
             .workflow-node {
                 position: absolute;
-                background: none;
-                // border: 2px solid #e5e7eb;
-                border-radius: 9px;
-                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                background: white;
+                border: 1.5px solid #e5e7eb;
+                border-radius: 8px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
                 cursor: move;
                 user-select: none;
-                transition: box-shadow 0.2s, border-color 0.2s;
+                transition: all 0.2s ease;
+            }
+            
+            .dark .workflow-node {
+                background: #1e293b;
+                border-color: #334155;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2);
             }
             
             .workflow-node.selected {
-                border: 2px solid #3b82f6;
-                box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+                border-color: #3b82f6;
+                box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+            }
+            
+            .dark .workflow-node.selected {
+                border-color: #60a5fa;
+                box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.2);
             }
             
             .workflow-node.dragging {
-                opacity: 0.9;
-                box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+                opacity: 0.95;
+                box-shadow: 0 8px 20px rgba(0,0,0,0.15);
                 z-index: 1000;
                 transition: none;
             }
             
+            .dark .workflow-node.dragging {
+                box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+            }
+            
             .node-port {
                 position: absolute;
-                width: 12px;
-                height: 12px;
+                width: 10px;
+                height: 10px;
                 background: #6b7280;
                 border: 2px solid white;
                 border-radius: 50%;
                 cursor: crosshair;
                 z-index: 10;
-                transition: all 0.2s;
+                transition: all 0.15s ease;
+            }
+            
+            .dark .node-port {
+                background: #94a3b8;
+                border-color: #1e293b;
             }
             
             .node-port:hover {
-                transform: scale(1.3);
+                transform: scale(1.4);
                 background: #3b82f6;
             }
             
+            .dark .node-port:hover {
+                background: #60a5fa;
+            }
+            
             .node-port.input {
-                left: -6px;
+                left: -5px;
                 top: 50%;
                 transform: translateY(-50%);
             }
             
             .node-port.output {
-                right: -6px;
+                right: -5px;
                 top: 50%;
                 transform: translateY(-50%);
             }
             
+            .node-port:hover.input,
+            .node-port:hover.output {
+                transform: scale(1.4) translateY(-50%);
+            }
+            
             .node-port.connected {
                 background: #10b981;
+            }
+            
+            .dark .node-port.connected {
+                background: #34d399;
             }
             
             .node-port.connecting {
@@ -192,20 +240,35 @@ export default class SwanEditor {
                 animation: pulse 1s infinite;
             }
             
+            .dark .node-port.connecting {
+                background: #fbbf24;
+            }
+            
             @keyframes pulse {
                 0%, 100% { transform: scale(1) translateY(-50%); }
-                50% { transform: scale(1.3) translateY(-50%); }
+                50% { transform: scale(1.4) translateY(-50%); }
             }
             
             .edge-path {
                 fill: none;
+                stroke: #6b7280;
                 stroke-width: 2;
                 pointer-events: stroke;
                 cursor: pointer;
+                transition: all 0.15s ease;
+            }
+            
+            .dark .edge-path {
+                stroke: #94a3b8;
             }
             
             .edge-path:hover {
-                stroke-width: 3;
+                stroke-width: 2.5;
+                stroke: #3b82f6;
+            }
+            
+            .dark .edge-path:hover {
+                stroke: #60a5fa;
             }
             
             .edge-path.preview {
@@ -213,6 +276,10 @@ export default class SwanEditor {
                 stroke-dasharray: 5, 5;
                 animation: dash 0.5s linear infinite;
                 pointer-events: none;
+            }
+            
+            .dark .edge-path.preview {
+                stroke: #fbbf24;
             }
             
             @keyframes dash {
@@ -224,9 +291,7 @@ export default class SwanEditor {
                 top: 0;
                 left: 0;
                 right: 0;
-                // height: 30px;
                 cursor: move;
-                // border-radius: 6px 6px 0 0;
             }
             
             .node-content {
@@ -242,6 +307,72 @@ export default class SwanEditor {
             }
         `;
         document.head.appendChild(style);
+    }
+
+    /**
+     * Toggle theme between light and dark
+     */
+    toggleTheme() {
+        this.options.theme = this.options.theme === 'light' ? 'dark' : 'light';
+        this.applyTheme();
+    }
+
+    /**
+     * Set specific theme
+     */
+    setTheme(theme) {
+        if (theme !== 'light' && theme !== 'dark') {
+            console.warn('Invalid theme. Use "light" or "dark"');
+            return;
+        }
+        this.options.theme = theme;
+        this.applyTheme();
+    }
+
+    /**
+     * Apply current theme to all elements
+     */
+    applyTheme() {
+        const container = this.container.querySelector('.workflow-container');
+        
+        if (this.options.theme === 'dark') {
+            container.classList.add('dark');
+        } else {
+            container.classList.remove('dark');
+        }
+        
+        // Update canvas background
+        this.updateCanvasBackground();
+        
+        // Update all edge markers
+        this.edges.forEach(edge => {
+            const markerSuffix = this.options.theme === 'dark' ? '-dark' : '-light';
+            edge.element.setAttribute('marker-end', `url(#wf-arrowhead${markerSuffix})`);
+        });
+        
+        // Re-render all nodes to update text colors
+        this.nodes.forEach(node => {
+            const oldElement = node.element;
+            this.renderNode(node);
+            oldElement.remove();
+        });
+        
+        // Update edges after node re-render
+        this.edges.forEach(edge => this.updateEdgePath(edge));
+        
+        // Trigger callback
+        this.triggerCallback('onThemeChange', this.options.theme);
+    }
+
+    /**
+     * Update canvas background based on theme
+     */
+    updateCanvasBackground() {
+        const bg = typeof this.options.canvas.background === 'object'
+            ? this.options.canvas.background[this.options.theme]
+            : this.options.canvas.background;
+        
+        this.canvas.style.background = bg;
     }
     
     /**
@@ -548,7 +679,7 @@ export default class SwanEditor {
         
         if (sourceType.onConnect) sourceType.onConnect(sourceNode, targetNode, edge);
         if (targetType.onConnect) targetType.onConnect(targetNode, sourceNode, edge);
-        
+
         // Trigger callback
         this.triggerCallback('onEdgeCreate', edge);
         
@@ -562,7 +693,10 @@ export default class SwanEditor {
         const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         path.id = edge.id;
         path.setAttribute('class', 'edge-path');
-        path.setAttribute('marker-end', 'url(#wf-arrowhead)');
+        
+        // Set marker based on theme
+        // const markerSuffix = this.options.theme === 'dark' ? '-dark' : '-light';
+        // path.setAttribute('marker-end', `url(#wf-arrowhead${markerSuffix})`);
         
         // Apply custom styles
         if (edge.style) {
@@ -585,7 +719,7 @@ export default class SwanEditor {
         
         // Add to SVG
         this.svg.appendChild(path);
-        
+
         // Update path
         this.updateEdgePath(edge);
     }
@@ -1024,7 +1158,8 @@ export default class SwanEditor {
         this.connectionState = {
             sourceNodeId: nodeId,
             sourcePortType: portType,
-            previewPath: null
+            previewPath: null,
+            isUpdating: false
         };
         
         // Add connecting class
@@ -1103,29 +1238,52 @@ export default class SwanEditor {
     updateConnectionPreview(e) {
         if (!this.connectionState || !this.connectionState.previewPath) return;
         
-        const sourceNode = this.nodes.get(this.connectionState.sourceNodeId);
-        if (!sourceNode) return;
+        // Throttle using RAF
+        if (this.connectionState.isUpdating) return;
         
-        const sourcePort = sourceNode.ports[this.connectionState.sourcePortType];
-        if (!sourcePort) return;
+        this.connectionState.isUpdating = true;
+        this.connectionState.pendingEvent = e;
         
-        const sourceRect = sourcePort.getBoundingClientRect();
-        const canvasRect = this.canvas.getBoundingClientRect();
+        requestAnimationFrame(() => {
+            if (!this.connectionState) return;
+            
+            const event = this.connectionState.pendingEvent;
+            this.connectionState.isUpdating = false;
+
         
-        // Calculate positions
-        const x1 = sourceRect.left - canvasRect.left + sourceRect.width / 2 + this.canvas.scrollLeft;
-        const y1 = sourceRect.top - canvasRect.top + sourceRect.height / 2 + this.canvas.scrollTop;
-        const x2 = e.clientX - canvasRect.left + this.canvas.scrollLeft;
-        const y2 = e.clientY - canvasRect.top + this.canvas.scrollTop;
-        
-        // Create bezier curve
-        const dx = x2 - x1;
-        const curvature = Math.abs(dx) * 0.5;
-        const ctrl1x = x1 + curvature;
-        const ctrl2x = x2 - curvature;
-        
-        const d = `M ${x1} ${y1} C ${ctrl1x} ${y1}, ${ctrl2x} ${y2}, ${x2} ${y2}`;
-        this.connectionState.previewPath.setAttribute('d', d);
+            const sourceNode = this.nodes.get(this.connectionState.sourceNodeId);
+            if (!sourceNode) return;
+            
+            const sourcePort = sourceNode.ports[this.connectionState.sourcePortType];
+            if (!sourcePort) return;
+            
+            // CACHE the source port rect on first call to avoid repeated getBoundingClientRect
+            if (!this.connectionState.sourceRect) {
+                const sourceRect = sourcePort.getBoundingClientRect();
+                const canvasRect = this.canvas.getBoundingClientRect();
+                
+                this.connectionState.sourceRect = {
+                    x: sourceRect.left - canvasRect.left + sourceRect.width / 2 + this.canvas.scrollLeft,
+                    y: sourceRect.top - canvasRect.top + sourceRect.height / 2 + this.canvas.scrollTop
+                };
+                this.connectionState.canvasRect = canvasRect;
+            }
+            
+            // Use cached values
+            const x1 = this.connectionState.sourceRect.x;
+            const y1 = this.connectionState.sourceRect.y;
+            const x2 = event.clientX - this.connectionState.canvasRect.left + this.canvas.scrollLeft;
+            const y2 = event.clientY - this.connectionState.canvasRect.top + this.canvas.scrollTop;
+            
+            // Create bezier curve
+            const dx = x2 - x1;
+            const curvature = Math.abs(dx) * 0.5;
+            const ctrl1x = x1 + curvature;
+            const ctrl2x = x2 - curvature;
+            
+            const d = `M ${x1} ${y1} C ${ctrl1x} ${y1}, ${ctrl2x} ${y2}, ${x2} ${y2}`;
+            this.connectionState.previewPath.setAttribute('d', d);
+        });
     }
     
     /**
@@ -1210,6 +1368,9 @@ export default class SwanEditor {
             port.classList.remove('connecting');
         });
         
+        // Clear the connection state completely
+        this.connectionState.sourceRect = null;
+        this.connectionState.canvasRect = null;
         this.connectionState = null;
     }
     
