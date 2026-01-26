@@ -20,20 +20,20 @@ export default class SwanEditor {
         
         // Configuration with defaults
         this.options = {
-            gridSize: 1,                    // Grid snapping (1 = disabled)
-            theme: 'light',                 // Theme: 'light' or 'dark'
-            edgeStyle: {                    // Default edge styling
+            gridSize: 1,
+            theme: 'light',                 // or 'dark'
+            edgeStyle: {
                 color: '#6b7280',
                 width: 2,
                 dashed: false,
                 animated: false
             },
-            nodeDefaults: {                 // Default node data
+            nodeDefaults: {
                 width: 200,
                 resizable: false,
                 deletable: true
             },
-            canvas: {                       // Canvas configuration
+            canvas: {
                 width: '100%',
                 height: '100vh',
                 background: {
@@ -102,6 +102,13 @@ export default class SwanEditor {
                             </marker>
                             <marker id="wf-arrowhead-selected-dark" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
                                 <polygon points="0 0, 10 3, 0 6" fill="#60a5fa" />
+                            </marker>
+                            <!-- Conditional edge markers -->
+                            <marker id="wf-arrowhead-green" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                                <polygon points="0 0, 10 3, 0 6" fill="#22c55e" />
+                            </marker>
+                            <marker id="wf-arrowhead-red" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">
+                                <polygon points="0 0, 10 3, 0 6" fill="#ef4444" />
                             </marker>
                         </defs>
                     </svg>
@@ -431,8 +438,11 @@ export default class SwanEditor {
             template: config.template || ((node) => `<div style="padding: 16px;">${type}</div>`),
             ports: config.ports || ['input', 'output'],
             style: config.style || {},
+            maxOutputEdges: config.maxOutputEdges || null, // null = unlimited, number = limit
+            maxInputEdges: config.maxInputEdges || null,   // null = unlimited, number = limit
             onCreate: config.onCreate || (() => {}),
             onUpdate: config.onUpdate || (() => {}),
+            getEdgeStyle: config.getEdgeStyle || (() => ({})),
             onDelete: config.onDelete || (() => {}),
             onConnect: config.onConnect || (() => {}),
             onDisconnect: config.onDisconnect || (() => {})
@@ -473,11 +483,22 @@ export default class SwanEditor {
      * @param {string} type - Node type
      * @param {Object} position - Position {x, y}
      * @param {Object} data - Node data
+     * @param {string} id - Optional node ID (if not provided, auto-generated)
      * @returns {string} Node ID
      */
-    createNode(type = 'default', position = {}, data = {}) {
+    createNode(type = 'default', position = {}, data = {}, id = null) {
         const nodeType = this.nodeTypes.get(type) || this.nodeTypes.get('default');
-        const id = `node-${this.nodeIdCounter++}`;
+        
+        // Use provided ID or generate new one
+        if (!id) {
+            id = `node-${this.nodeIdCounter++}`;
+        } else {
+            // Update counter if provided ID is higher
+            const idNumber = parseInt(id.replace('node-', ''));
+            if (!isNaN(idNumber) && idNumber >= this.nodeIdCounter) {
+                this.nodeIdCounter = idNumber + 1;
+            }
+        }
         
         const node = {
             id,
@@ -646,39 +667,67 @@ export default class SwanEditor {
             return existingEdge.id;
         }
         
+        // Get source and target nodes and their types
+        const sourceNode = this.nodes.get(sourceId);
+        const sourceType = this.nodeTypes.get(sourceNode.type);
+        const targetNode = this.nodes.get(targetId);
+        const targetType = this.nodeTypes.get(targetNode.type);
+        
+        // Count existing outgoing edges from source to determine edge index
+        const existingOutgoingEdges = Array.from(this.edges.values()).filter(
+            edge => edge.source === sourceId
+        );
+        const edgeIndex = existingOutgoingEdges.length;
+        
+        // Check max output edges for source node
+        if (sourceType && sourceType.maxOutputEdges !== null) {
+            if (edgeIndex >= sourceType.maxOutputEdges) {
+                console.warn(`SwanEditor: Maximum output edges (${sourceType.maxOutputEdges}) reached for node ${sourceId}`);
+                return null;
+            }
+        }
+        
+        // Check max input edges for target node
+        if (targetType && targetType.maxInputEdges !== null) {
+            const currentInputEdges = Array.from(this.edges.values()).filter(
+                edge => edge.target === targetId
+            ).length;
+            if (currentInputEdges >= targetType.maxInputEdges) {
+                console.warn(`SwanEditor: Maximum input edges (${targetType.maxInputEdges}) reached for node ${targetId}`);
+                return null;
+            }
+        }
+        
+        // Get custom edge style from node type if available
+        let customEdgeStyle = {};
+        if (sourceType && sourceType.getEdgeStyle) {
+            customEdgeStyle = sourceType.getEdgeStyle(sourceNode, edgeIndex, targetId) || {};
+        }
+
         const id = `edge-${this.edgeIdCounter++}`;
         const edge = {
             id,
             source: sourceId,
             target: targetId,
+            edgeIndex,  // Store the edge index for reference
             style: {
                 ...this.options.edgeStyle,
+                ...customEdgeStyle,
                 ...options.style
             },
             data: options.data || {},
             element: null
         };
         
-        // Store edge
         this.edges.set(id, edge);
-
-        // Render edge
         this.renderEdge(edge);
-
-        // Update port states
         this.updatePortStates();
         
         // Update cache
         this.updateCacheOnEdgeCreate(edge);
         
-        // Call lifecycle hooks
-        const sourceNode = this.nodes.get(sourceId);
-        const targetNode = this.nodes.get(targetId);
-        const sourceType = this.nodeTypes.get(sourceNode.type);
-        const targetType = this.nodeTypes.get(targetNode.type);
-        
-        if (sourceType.onConnect) sourceType.onConnect(sourceNode, targetNode, edge);
-        if (targetType.onConnect) targetType.onConnect(targetNode, sourceNode, edge);
+        if (sourceType && sourceType.onConnect) sourceType.onConnect(sourceNode, targetNode, edge);
+        if (targetType && targetType.onConnect) targetType.onConnect(targetNode, sourceNode, edge);
 
         // Trigger callback
         this.triggerCallback('onEdgeCreate', edge);
@@ -694,9 +743,10 @@ export default class SwanEditor {
         path.id = edge.id;
         path.setAttribute('class', 'edge-path');
         
-        // Set marker based on theme
-        // const markerSuffix = this.options.theme === 'dark' ? '-dark' : '-light';
-        // path.setAttribute('marker-end', `url(#wf-arrowhead${markerSuffix})`);
+        // Set marker based on edge color or theme
+        if (edge.style && edge.style.markerColor) {
+            path.setAttribute('marker-end', `url(#wf-arrowhead-${edge.style.markerColor})`);
+        }
         
         // Apply custom styles
         if (edge.style) {
@@ -708,19 +758,13 @@ export default class SwanEditor {
             }
         }
         
-        // Add click handler for edge selection/deletion
         path.addEventListener('click', (e) => {
             e.stopPropagation();
             this.selectEdge(edge.id);
         });
         
-        // Store element reference
         edge.element = path;
-        
-        // Add to SVG
         this.svg.appendChild(path);
-
-        // Update path
         this.updateEdgePath(edge);
     }
     
@@ -1390,7 +1434,41 @@ export default class SwanEditor {
                    (edge.source === targetNodeId && edge.target === sourceNodeId);
         });
         
-        return !existingEdge;
+        if (existingEdge) return false;
+        
+        // Determine actual source and target based on port types
+        const actualSourceId = sourcePortType === 'output' ? sourceNodeId : targetNodeId;
+        const actualTargetId = sourcePortType === 'output' ? targetNodeId : sourceNodeId;
+        
+        // Check max output edges for source node
+        const sourceNode = this.nodes.get(actualSourceId);
+        if (sourceNode) {
+            const sourceType = this.nodeTypes.get(sourceNode.type);
+            if (sourceType && sourceType.maxOutputEdges !== null) {
+                const currentOutputEdges = Array.from(this.edges.values()).filter(
+                    edge => edge.source === actualSourceId
+                ).length;
+                if (currentOutputEdges >= sourceType.maxOutputEdges) {
+                    return false;
+                }
+            }
+        }
+        
+        // Check max input edges for target node
+        const targetNode = this.nodes.get(actualTargetId);
+        if (targetNode) {
+            const targetType = this.nodeTypes.get(targetNode.type);
+            if (targetType && targetType.maxInputEdges !== null) {
+                const currentInputEdges = Array.from(this.edges.values()).filter(
+                    edge => edge.target === actualTargetId
+                ).length;
+                if (currentInputEdges >= targetType.maxInputEdges) {
+                    return false;
+                }
+            }
+        }
+        
+        return true;
     }
     
     /**
@@ -1425,8 +1503,11 @@ export default class SwanEditor {
      */
     handleKeyDown(e) {
         // Delete selected nodes/edges
-        if (e.key === 'Delete') {
+        if (e.key === 'Delete' || e.key === 'Backspace') {
             e.preventDefault();
+            // Confirm deletion
+            if (this.selectedNodes.size === 0) return;
+            if (confirm('Delete selected node?'))
             this.deleteSelected();
         }
         
@@ -1603,32 +1684,25 @@ export default class SwanEditor {
         // Clear existing
         this.clear();
         
-        // Map old IDs to new IDs
-        const idMap = new Map();
-        
-        // Create nodes
+        // Create nodes with original IDs preserved
         if (data.nodes) {
             data.nodes.forEach(nodeData => {
-                const newId = this.createNode(
+                this.createNode(
                     nodeData.type,
                     nodeData.position,
-                    nodeData.data
+                    nodeData.data,
+                    nodeData.id  // Preserve original ID
                 );
-                idMap.set(nodeData.id, newId);
             });
         }
         
-        // Create edges
+        // Create edges (no ID mapping needed since IDs are preserved)
         if (data.edges) {
             data.edges.forEach(edgeData => {
-                const sourceId = idMap.get(edgeData.source);
-                const targetId = idMap.get(edgeData.target);
-                if (sourceId && targetId) {
-                    this.createEdge(sourceId, targetId, {
-                        style: edgeData.style,
-                        data: edgeData.data
-                    });
-                }
+                this.createEdge(edgeData.source, edgeData.target, {
+                    style: edgeData.style,
+                    data: edgeData.data
+                });
             });
         }
     }
@@ -1660,7 +1734,7 @@ export default class SwanEditor {
      */
     importJSON(json) {
         try {
-            const data = JSON.parse(json);
+            const data = typeof json === 'string' ? JSON.parse(json) : json;
             this.loadWorkflowData(data);
             return true;
         } catch (error) {
